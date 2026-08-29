@@ -1,0 +1,37 @@
+{% comment %}
+  TRMNL private plugin markup — voice chess board.
+  Modeled on the Lichess Daily Puzzle layout: the board is a single remote
+  image, so no CSS board and no dithering problems.
+
+  merge_variables pushed by chess_mcp_server.py:
+    image_url, status, last_move, move_number, turn, history, engine, level
+{% endcomment %}
+
+<div class="layout layout--col gap--small lg:gap">
+
+  <div class="flex flex--row flex--between flex--center-y">
+    <span class="label label--base lg:label--large">
+      Move {{ move_number }} — {{ turn }} to play
+    </span>
+    <span class="label label--outline label--base lg:label--large">
+      {{ engine }} · {{ level }}
+    </span>
+  </div>
+
+  <div class="flex flex--center-x flex--center-y stretch-y" style="overflow:hidden;">
+    <img style="max-width:100%; max-height:90cqh; object-fit:contain;"
+         src="{{ image_url }}" alt="Chess board">
+  </div>
+
+  <div class="flex flex--center-x">
+    <span class="label label--base lg:label--base">
+      {% for move in history %}{{ move }}{% unless forloop.last %} · {% endunless %}{% endfor %}
+    </span>
+  </div>
+
+</div>
+
+<div class="title_bar">
+  <span class="title">Voice Chess</span>
+  <span class="instance">{{ last_move }} · {{ status }} · {{ engine }} {{ level }}</span>
+</div>
