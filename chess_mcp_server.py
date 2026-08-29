@@ -191,6 +191,12 @@ async def engine_move(board: chess.Board, level: int, engine_kind: str) -> chess
 
 _lock = asyncio.Lock()
 _last_push = 0.0
+# Tracks a deferred TRMNL push (see push() below). While this is set and not
+# yet done, make_move refuses new moves -- otherwise a player could keep
+# moving faster than TRMNL's 5-minute webhook limit lets the display catch
+# up, and would be playing a game they can no longer see on the board.
+_pending_push: asyncio.Task | None = None
+_pending_push_eta = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -309,13 +315,14 @@ def board_image_url(board: chess.Board, last_uci: str | None) -> str:
     return f"{BOARD_SERVICE}?{urlencode(params)}"
 
 
-async def push(state: dict) -> None:
-    """POST merge variables to TRMNL. Rate limited to once per 5 minutes."""
-    global _last_push
+PUSH_INTERVAL = 300  # TRMNL's own webhook rate limit, in seconds
+
+
+def _build_payload(state: dict) -> dict:
     board = chess.Board(state["fen"])
     engine_kind = state.get("engine", ENGINE_KIND)
     skill = state.get("skill", DEFAULT_LEVEL)
-    payload = {
+    return {
         "merge_variables": {
             "image_url": board_image_url(board, state.get("last_uci")),
             "status": state["status"],
@@ -327,15 +334,71 @@ async def push(state: dict) -> None:
             "level": level_name(skill, engine_kind),
         }
     }
-    if time.time() - _last_push < 300:
-        return  # TRMNL 429s below a five minute interval
+
+
+async def _post_to_trmnl(payload: dict) -> httpx.Response:
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(
             f"https://usetrmnl.com/api/custom_plugins/{PLUGIN_UUID}",
             json=payload,
         )
         r.raise_for_status()
-    _last_push = time.time()
+        return r
+
+
+async def _deferred_push(delay: float) -> None:
+    """Wait out the rate-limit window, then push whatever the *current* state
+    is at that point -- not a stale snapshot from when this was scheduled, so
+    several moves inside one window still end up as a single push of the
+    latest position rather than a burst of queued sends. This is a single
+    scheduled retry, not a retry loop: on failure it just gives up and logs,
+    it doesn't reschedule itself again.
+    """
+    global _last_push, _pending_push
+    try:
+        await asyncio.sleep(delay)
+        await _post_to_trmnl(_build_payload(load()))
+        _last_push = time.time()
+        logger.info("push: deferred push sent")
+    except Exception:
+        logger.exception("push: deferred push failed, giving up")
+    finally:
+        _pending_push = None
+
+
+async def push(state: dict) -> None:
+    """POST merge variables to TRMNL, honoring its 5-minute webhook rate
+    limit. Inside the window (or if TRMNL 429s anyway -- our own tracker can
+    fall out of sync with theirs across a restart), this schedules exactly
+    one deferred push for when the window clears, tracked in _pending_push
+    so make_move can refuse new moves until the board is confirmed caught up.
+    Any other failure (bad UUID, network error, TRMNL outage) is logged and
+    swallowed without blocking play -- those won't resolve on a timer, so
+    there's nothing to wait out.
+    """
+    global _last_push, _pending_push, _pending_push_eta
+    elapsed = time.time() - _last_push
+    if elapsed < PUSH_INTERVAL:
+        if _pending_push is None or _pending_push.done():
+            delay = PUSH_INTERVAL - elapsed
+            _pending_push_eta = time.time() + delay
+            _pending_push = asyncio.create_task(_deferred_push(delay))
+            logger.info("push: inside rate-limit window, deferred by %.0fs", delay)
+        return
+
+    try:
+        await _post_to_trmnl(_build_payload(state))
+        _last_push = time.time()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429 and (_pending_push is None or _pending_push.done()):
+            delay = float(e.response.headers.get("retry-after", PUSH_INTERVAL))
+            _pending_push_eta = time.time() + delay
+            _pending_push = asyncio.create_task(_deferred_push(delay))
+            logger.warning("push: TRMNL 429'd despite our tracker; deferred by %.0fs", delay)
+        elif e.response.status_code != 429:
+            logger.exception("push: TRMNL push failed")
+    except Exception:
+        logger.exception("push: TRMNL push failed")
 
 
 # --------------------------------------------------------------------------
@@ -360,6 +423,14 @@ async def make_move(move: str) -> str:
     Returns a short sentence describing your move and the engine's reply.
     """
     logger.info("make_move: received %r", move)
+    if _pending_push is not None and not _pending_push.done():
+        wait_s = max(0, round(_pending_push_eta - time.time()))
+        logger.info("make_move: rejected, board not yet refreshed (%ds left)", wait_s)
+        return (
+            "Hold on — the board hasn't updated on the display yet. TRMNL "
+            f"only refreshes once every 5 minutes; try again in about "
+            f"{wait_s} seconds so you can actually see the position first."
+        )
     async with _lock:
         state = load()
         board = chess.Board(state["fen"])

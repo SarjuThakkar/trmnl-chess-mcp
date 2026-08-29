@@ -17,8 +17,35 @@ Ring -> Pebble's cloud agent -> this server (Streamable HTTP + bearer token)
                           board image URL -> TRMNL webhook
 ```
 
-Four tools: `make_move`, `board_state`, `new_game`, `set_level`, plus
+Five tools: `make_move`, `board_state`, `new_game`, `set_level`, and
 `set_engine` to switch between Maia and Stockfish mid-game.
+
+## Why this is slow on purpose
+
+TRMNL's webhook accepts a push once every 5 minutes. The obvious read is
+"rate limit, route around it." The better read: the latency is the piece.
+
+A chess board that updates instantly is a chess app, and there are already
+several better ones on the phone in your hand. A board that takes minutes to
+answer is an object in a room — something you walk past, notice has
+changed, think about, and speak a move at on your way to do something else.
+Correspondence chess worked this way by post for a century, and people found
+it a richer game precisely because the thinking happened *between* moves,
+not during them.
+
+E-ink reinforces it physically. No glow, no notification, no way to demand
+attention — it just looks like a print sitting there until it doesn't. The
+ring matches this: capture is instant and effortless, but there's no screen
+and no reply, so you say the move and walk away.
+
+So the honest framing is that the constraint arrived for infrastructure
+reasons (TRMNL's own rate limit) and turned out to be the design. `make_move`
+refusing a second move until the first one is actually visible (see
+[Setting up the TRMNL private plugin](#setting-up-the-trmnl-private-plugin))
+isn't a workaround for that limit — it's what makes the five minutes real
+instead of cosmetic. The five-minute window is the metronome: a game paced
+to the rhythm of a household rather than a session, played across a day by
+someone passing through a room.
 
 ## Engines
 
@@ -147,8 +174,13 @@ The markup shows the board, whose move it is, move history, and an
 glance what you're playing against without asking.
 
 TRMNL rate-limits webhook pushes to once per 5 minutes and 429s above that.
-The server already drops pushes inside that window rather than retrying —
-don't "fix" that with a retry loop.
+Inside that window, the server schedules a single deferred push for when the
+window clears (always sending the *latest* position at that point, not a
+backlog of every intermediate move) rather than dropping the update outright
+— and **refuses new moves via `make_move` until that deferred push actually
+lands**, so you can never get ahead of what the display is showing. In
+practice this means moves faster than ~5 minutes apart get throttled to the
+display's own refresh rate; anything slower never notices the limit at all.
 
 ## Example phrases to try
 
@@ -198,11 +230,12 @@ character in the MCP server's **Name** field in the Pebble app.
 command as of v5.44.1/v5.45.7 — add the volume from the Railway dashboard
 instead (Volumes tab -> Add Volume -> mount path `/data`).
 
-**The board didn't update on TRMNL after a move.** Check whether you're
-inside the 5-minute rate-limit window (`_last_push` in
-`chess_mcp_server.py`) — the server intentionally drops the push rather
-than queuing or retrying. The next successful call outside the window will
-carry the current position.
+**Pebble says "hold on, the board hasn't updated yet."** You're inside
+TRMNL's 5-minute rate-limit window from a prior move. This is intentional —
+`make_move` refuses new moves until the deferred push actually lands, so you
+never make a move you can't see reflected on the board first. Check `railway
+logs` for `push: deferred push sent` to confirm it landed, or just wait out
+the number of seconds the message gave you.
 
 **A level/engine word wasn't understood.** Both `set_level` and `set_engine`
 return a descriptive error string (visible wherever Pebble surfaces tool
