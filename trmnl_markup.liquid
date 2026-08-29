@@ -4,7 +4,12 @@
   image, so no CSS board and no dithering problems.
 
   merge_variables pushed by chess_mcp_server.py:
-    image_url, status, last_move, move_number, turn, history, engine, level
+    image_url, status, last_move, move_number, turn, player_color, history,
+    engine, level
+
+  The board image is oriented to player_color (the user's own pieces at the
+  bottom), so it's worth always showing player_color on-screen too -- without
+  it, a flipped board with no label is confusing rather than clarifying.
 {% endcomment %}
 
 <div class="layout layout--col gap--small lg:gap">
@@ -32,6 +37,6 @@
 </div>
 
 <div class="title_bar">
-  <span class="title">Voice Chess</span>
+  <span class="title">Voice Chess — playing {{ player_color }}</span>
   <span class="instance">{{ last_move }} · {{ status }} · {{ engine }} {{ level }}</span>
 </div>

@@ -6,6 +6,9 @@ the engine replies, and the new position is pushed to TRMNL. Both lc0/Maia
 (human-like play, rating 1100-1900) and Stockfish (skill 0-20) ship in the
 container; ENGINE_KIND picks which one a fresh game starts on, and the
 `set_engine` tool switches mid-game by voice ("set engine to stockfish").
+`new_game` takes an optional color ("new game as black"); the board image
+orientation always follows whichever color the player is, and if they're
+black the engine plays its opening move before the position is ever pushed.
 
   pip install fastmcp chess httpx
 
@@ -27,6 +30,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 from urllib.parse import urlencode
@@ -212,6 +216,7 @@ def load() -> dict:
         "status": "Your move.",
         "engine": ENGINE_KIND,
         "skill": DEFAULT_LEVEL,
+        "player_color": "white",
     }
 
 
@@ -295,12 +300,18 @@ def parse_move(board: chess.Board, text: str) -> chess.Move:
 # rendering + push
 # --------------------------------------------------------------------------
 
-def board_image_url(board: chess.Board, last_uci: str | None) -> str:
+def board_image_url(board: chess.Board, last_uci: str | None, player_color: str) -> str:
     """Build a board image URL. The renderer is a hosted service, so TRMNL
-    just fetches an <img> — no CSS board, no dithering headaches."""
+    just fetches an <img> — no CSS board, no dithering headaches.
+
+    Oriented to the player's own color (verified live: orientation=black
+    actually flips the rendered board, not just a label) so their pieces
+    are always at the bottom, matching how they'd expect to see the board
+    regardless of which side they're playing.
+    """
     params = {
         "fen": board.board_fen(),
-        "orientation": "white",
+        "orientation": player_color,
         "coordinates": "true",
         # High-contrast theme; the brown/blue themes muddy on 1-bit e-ink.
         "colors": "wikipedia",
@@ -322,13 +333,15 @@ def _build_payload(state: dict) -> dict:
     board = chess.Board(state["fen"])
     engine_kind = state.get("engine", ENGINE_KIND)
     skill = state.get("skill", DEFAULT_LEVEL)
+    player_color = state.get("player_color", "white")
     return {
         "merge_variables": {
-            "image_url": board_image_url(board, state.get("last_uci")),
+            "image_url": board_image_url(board, state.get("last_uci"), player_color),
             "status": state["status"],
             "last_move": state["history"][-1] if state["history"] else "—",
             "move_number": board.fullmove_number,
             "turn": "White" if board.turn else "Black",
+            "player_color": player_color.capitalize(),
             "history": state["history"][-6:],
             "engine": engine_label(engine_kind),
             "level": level_name(skill, engine_kind),
@@ -487,25 +500,31 @@ async def board_state() -> str:
     state = load()
     board = chess.Board(state["fen"])
     recent = ", ".join(state["history"][-4:]) or "no moves yet"
+    player_color = state.get("player_color", "white")
     return (
+        f"You're playing {player_color}. "
         f"{'White' if board.turn else 'Black'} to move, "
         f"move {board.fullmove_number}. Recent: {recent}. {state['status']}"
     )
 
 
 @mcp.tool()
-async def new_game(level: str = "") -> str:
-    """Start a fresh game, optionally setting the engine difficulty.
+async def new_game(level: str = "", color: str = "") -> str:
+    """Start a fresh game, optionally setting the engine difficulty and which
+    color you play.
 
     Call this when the user says anything like "new game", "start over",
-    "reset the board", or "let's play again".
+    "reset the board", "new game as black", "let's play white this time".
 
     Args:
         level: Optional difficulty in the user's own words, e.g. "easy",
                "club", "hard", "max", or a number 0-20. Leave empty to keep
                the current setting. Pass the user's phrasing verbatim.
+        color: Optional -- "white" or "black" to choose which side the user
+               plays. Leave empty for a random color each game. Pass the
+               user's phrasing verbatim, e.g. "black" or "as white".
     """
-    logger.info("new_game: level=%r", level)
+    logger.info("new_game: level=%r color=%r", level, color)
     async with _lock:
         prior = load()
         engine_kind = prior.get("engine", ENGINE_KIND)
@@ -516,21 +535,51 @@ async def new_game(level: str = "") -> str:
             except ValueError as e:
                 return str(e)
 
+        c = color.lower().strip()
+        if re.search(r"\bblack\b", c):
+            player_color = "black"
+        elif re.search(r"\bwhite\b", c):
+            player_color = "white"
+        else:
+            player_color = random.choice(["white", "black"])
+
+        board = chess.Board()
+        history: list[str] = []
+        last_uci = None
+        opener_san = None
+        if player_color == "black":
+            # Player is black -- the engine plays white and moves first, so
+            # the position pushed to TRMNL already reflects whose turn it
+            # actually is instead of showing an untouched board the player
+            # can't act on.
+            mv = await engine_move(board, skill, engine_kind)
+            opener_san = board.san(mv)
+            board.push(mv)
+            history.append(opener_san)
+            last_uci = mv.uci()
+
         state = {
-            "fen": chess.STARTING_FEN,
-            "history": [],
+            "fen": board.fen(),
+            "history": history,
+            "last_uci": last_uci,
             "status": "Your move.",
             "engine": engine_kind,
             "skill": skill,
+            "player_color": player_color,
         }
         save(state)
         global _last_push
         _last_push = 0  # a new game always earns an immediate refresh
         await push(state)
-    return (
+
+    msg = (
         f"New game ({engine_label(engine_kind)}) at "
-        f"{level_name(skill, engine_kind)}. You're white — your move."
+        f"{level_name(skill, engine_kind)}. You're {player_color}."
     )
+    if opener_san:
+        msg += f" I played {opener_san} as white."
+    msg += " Your move."
+    return msg
 
 
 @mcp.tool()

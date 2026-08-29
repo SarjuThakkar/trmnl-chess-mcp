@@ -195,6 +195,10 @@ Double-click the ring, then:
 - **"Set engine to maia."** then **"set level to 1700."**
 - **"Make it harder."** / **"make it easier."** — relative nudge, no number needed.
 - **"What's the position?"** — reads the board state back without a move.
+- **"New game as black."** — you'll play black; the engine (white) moves
+  first before the position is pushed, and the board image is oriented with
+  your pieces at the bottom.
+- **"New game."** with no color — random each time.
 
 ## What's verified vs. assumed
 
