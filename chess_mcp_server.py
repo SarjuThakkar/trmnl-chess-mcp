@@ -39,7 +39,7 @@ from pathlib import Path
 import chess
 import chess.engine
 import httpx
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -201,6 +201,15 @@ _last_push = 0.0
 # up, and would be playing a game they can no longer see on the board.
 _pending_push: asyncio.Task | None = None
 _pending_push_eta = 0.0
+# Pebble opens one MCP session per double-click (confirmed live: a fresh
+# "Created new transport with session ID" log line per turn). Caught in
+# production: the agent called make_move twice within a single session,
+# unprompted, to "helpfully" play an obvious-looking recapture after its
+# own reply captured the player's queen -- an entirely different failure
+# from the earlier retry-after-error chaining, since both calls succeeded.
+# One real move per session, enforced server-side, is a hard guarantee the
+# docstring alone can't provide.
+_moved_sessions: set[str] = set()
 
 
 # --------------------------------------------------------------------------
@@ -558,7 +567,7 @@ mcp = FastMCP("chess")
 
 
 @mcp.tool()
-async def make_move(move: str) -> str:
+async def make_move(move: str, ctx: Context) -> str:
     """Play a chess move on the board shown on the TRMNL display.
 
     This server understands both loose natural language ("knight to f3",
@@ -590,6 +599,11 @@ async def make_move(move: str) -> str:
     Returns a short sentence describing your move and the engine's reply.
     """
     logger.info("make_move: received %r", move)
+    session_id = ctx.session_id
+    if session_id in _moved_sessions:
+        logger.warning("make_move: refused second call in session %s", session_id)
+        return "Only one move per turn -- double-click again to make your next move."
+    _moved_sessions.add(session_id)
     if _pending_push is not None and not _pending_push.done():
         wait_s = max(0, round(_pending_push_eta - time.time()))
         logger.info("make_move: rejected, board not yet refreshed (%ds left)", wait_s)
