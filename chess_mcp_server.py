@@ -228,6 +228,65 @@ def save(state: dict) -> None:
 # voice-tolerant move parsing
 # --------------------------------------------------------------------------
 
+# piece? origin-file? origin-rank? capture? target-square (promo)? check/mate?
+# e.g. "rdf8" -> rook, origin file d, target f8. "exd5" -> pawn, origin file
+# e, capture, target d5. Case-insensitive by construction (caller lowercases
+# and strips whitespace first) -- python-chess's own parse_san won't accept
+# any of this, since real SAN uses case itself to distinguish a piece letter
+# from a file letter and rejects a stray "P" for pawn moves entirely.
+_COMPACT_MOVE_RE = re.compile(
+    r"^(?P<piece>[pnbrqk])?"
+    r"(?P<origin_file>[a-h])?(?P<origin_rank>[1-8])?"
+    r"(?P<capture>x)?"
+    r"(?P<target>[a-h][1-8])"
+    r"(?:=(?P<promo>[nbrqk]))?"
+    r"[+#]?$"
+)
+
+
+def _try_compact_move(board: chess.Board, cleaned: str, raw: str) -> chess.Move | None:
+    """Match a glued, case-insensitive token like "rdf8" or "exd5" directly
+    against the real legal move list.
+
+    Returns None if `cleaned` doesn't even look like compact notation, so
+    the caller can fall back to looser phrase matching. If it *does* match
+    syntactically, this is authoritative and raises ValueError itself on 0
+    or >1 candidates (with the candidate list properly filtered by the
+    piece/disambiguation actually given) rather than returning None, so an
+    ambiguous compact move doesn't fall through to the much looser filter
+    below and lose the disambiguation info the caller already provided.
+    """
+    m = _COMPACT_MOVE_RE.match(cleaned)
+    if not m:
+        return None
+
+    piece_type = (
+        chess.PIECE_SYMBOLS.index(m.group("piece")) if m.group("piece") else chess.PAWN
+    )
+    origin_file = m.group("origin_file")
+    origin_rank = m.group("origin_rank")
+    target = m.group("target")
+    want_capture = bool(m.group("capture"))
+    promo = chess.PIECE_SYMBOLS.index(m.group("promo")) if m.group("promo") else None
+
+    candidates = [
+        mv
+        for mv in board.legal_moves
+        if chess.square_name(mv.to_square) == target
+        and board.piece_at(mv.from_square).piece_type == piece_type
+        and (not origin_file or chess.square_name(mv.from_square)[0] == origin_file)
+        and (not origin_rank or chess.square_name(mv.from_square)[1] == origin_rank)
+        and (not want_capture or board.is_capture(mv))
+        and (promo is None or mv.promotion == promo)
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise ValueError(f"No legal move matches '{raw}'.")
+    opts = ", ".join(board.san(c) for c in candidates)
+    raise ValueError(f"'{raw}' is ambiguous — did you mean {opts}?")
+
+
 def parse_move(board: chess.Board, text: str) -> chess.Move:
     """Resolve loose spoken text to exactly one legal move.
 
@@ -247,8 +306,8 @@ def parse_move(board: chess.Board, text: str) -> chess.Move:
 
     # 2. Normalise speech artifacts: "night to F3", "e 4", "takes on d5"
     t = raw.lower()
-    t = t.replace("-", " ").replace(".", " ")
-    t = re.sub(r"\b(to|on|at|the|please|move|go|and)\b", " ", t)
+    t = t.replace("-", " ").replace(".", " ").replace(",", " ")
+    t = re.sub(r"\b(to|on|at|in|the|please|move|go|and|file|rank)\b", " ", t)
     t = re.sub(r"\btakes?\b|\bcaptures?\b|\bx\b", " capture ", t)
 
     if "castle" in t or "castling" in t:
@@ -263,12 +322,23 @@ def parse_move(board: chess.Board, text: str) -> chess.Move:
     for word, piece in PIECES.items():
         t = re.sub(rf"\b{word}\b", chess.piece_symbol(piece).upper(), t)
 
+    # 2.5 Compact/disambiguated notation, case-insensitive: "Rdf8", "RDF8",
+    # "rdf8" (rook on the d-file to f8), "exd5", etc. Handles what the loose
+    # filter below structurally can't -- a bare file or rank used only to
+    # disambiguate ("d" meaning "the d-file rook"), not as a full square.
+    # python-chess's own parse_san (step 1) is case-sensitive and rejects
+    # this outright; this collapses whitespace and matches directly against
+    # the legal move list instead of delegating to it.
+    mv = _try_compact_move(board, re.sub(r"\s+", "", t).lower(), raw)
+    if mv is not None:
+        return mv
+
     squares = re.findall(r"\b([a-h])\s*([1-8])\b", t)
     target = f"{squares[-1][0]}{squares[-1][1]}" if squares else None
     origin = f"{squares[0][0]}{squares[0][1]}" if len(squares) > 1 else None
 
     piece_type = None
-    for sym in "NBRQK":
+    for sym in "PNBRQK":
         if re.search(rf"\b{sym}\b", t.upper()):
             piece_type = chess.PIECE_SYMBOLS.index(sym.lower())
             break
@@ -425,9 +495,18 @@ mcp = FastMCP("chess")
 async def make_move(move: str) -> str:
     """Play a chess move on the board shown on the TRMNL display.
 
-    Pass the user's words through almost verbatim — this server does the
-    interpreting. Do not translate to algebraic notation yourself and do not
-    guess when the user is unclear; pass the raw phrasing and relay any error.
+    This server understands both loose natural language ("knight to f3",
+    "take the bishop", "castle kingside") and compact algebraic notation
+    ("Nf3", "Bxe6", "Rdf8") -- case doesn't matter for the latter. If the
+    user's own words already fully specify a move -- piece, any needed
+    disambiguation, and destination, e.g. "rook on the d-file to f8" -- you
+    MAY write it as compact notation ("Rdf8") instead of the raw phrasing;
+    that is formatting a move the user already fully specified, not
+    guessing, and this server's exact-notation matching is more reliable
+    for disambiguated moves than its loose phrase matching. What you must
+    NOT do is invent information the user didn't give you: if they only
+    said "rook to f8" and two rooks could both go there, pass that through
+    as-is and let this tool ask which one -- don't pick one yourself.
 
     IMPORTANT: if the result describes an error (couldn't parse, ambiguous,
     board not yet refreshed, game over) -- speak that back to the user
@@ -438,8 +517,9 @@ async def make_move(move: str) -> str:
     guess this instruction tells you not to make.
 
     Args:
-        move: What the user said, e.g. "knight to f3", "e4", "take the bishop",
-              "castle kingside". Loose phrasing is expected and fine.
+        move: What the user said, e.g. "knight to f3", "e4", "take the
+              bishop", "castle kingside", or compact notation like "Rdf8"
+              if you're confident it captures everything the user said.
 
     Returns a short sentence describing your move and the engine's reply.
     """

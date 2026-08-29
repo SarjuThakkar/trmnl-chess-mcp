@@ -198,10 +198,32 @@ Double-click the ring, then:
 - **"New game as black."** — you'll play black; the engine (white) moves
   first before the position is pushed, and the board image is oriented with
   your pieces at the bottom.
+- **"Rook d takes f8"** / **"Rdf8"** — when two of the same piece could both
+  reach a square, say which file (or rank) yours is on; either loose or
+  compact phrasing works and resolves unambiguously instead of asking which
+  one you meant.
 - **"New game."** with no color — random each time.
 
 ## What's verified vs. assumed
 
+- **Disambiguated moves ("two rooks, same rank") were structurally broken**
+  before `_try_compact_move` was added. The original loose-phrase filter
+  could only recognize a *full second square* as an origin hint (like "e2
+  e4"), never a bare file or rank used purely to disambiguate ("the d-file
+  rook"). It also delegated exact-notation attempts straight to
+  `chess.Board.parse_san`, which is case-sensitive and rejects a stray
+  uppercase letter outright -- so "RDf8", "RDF8", and even correctly-cased
+  loose phrasing like "rook in the d-file to f8" all fell through to the
+  broken fallback and either dumped the entire legal move list as "did you
+  mean" or silently failed to narrow beyond both rooks. `_try_compact_move`
+  matches a cleaned, glued token directly against the legal move list with
+  real file/rank disambiguation, case-insensitively, and is authoritative
+  when it matches syntactically (raises its own properly-filtered
+  ambiguous/no-match error rather than falling through). Verified against
+  18 cases replayed from real production logs and the exact screenshots
+  that surfaced the bug (see `parser_extract.py`-style local testing --
+  `python-chess` installs fine outside the container for this, no Docker
+  needed) before deploying.
 - No Debian/Ubuntu package for lc0 exists (checked packages.debian.org
   directly) — it's compiled from source in the Dockerfile, pinned to release
   `v0.32.1`. The build-time smoke test (`smoke_test.py`) actually runs lc0
