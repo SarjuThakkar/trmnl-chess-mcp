@@ -21,11 +21,11 @@
   place that needs to change; swap the glyph values for "P"/"N"/"B"/"R"/"Q").
 {% endcomment %}
 
-<div class="layout layout--row gap--small lg:gap">
+<div class="layout layout--row flex--top gap--small lg:gap">
 
   <div class="layout layout--col flex--center-x gap--small" style="width: 14%;">
     <span class="label label--small">White</span>
-    <span class="label label--base lg:label--large">{{ white_captured }}</span>
+    <span class="label label--base">{{ white_captured }}</span>
     {% if white_edge != "" %}
       <span class="label label--small label--outline">{{ white_edge }}</span>
     {% endif %}
@@ -57,7 +57,7 @@
 
   <div class="layout layout--col flex--center-x gap--small" style="width: 14%;">
     <span class="label label--small">Black</span>
-    <span class="label label--base lg:label--large">{{ black_captured }}</span>
+    <span class="label label--base">{{ black_captured }}</span>
     {% if black_edge != "" %}
       <span class="label label--small label--outline">{{ black_edge }}</span>
     {% endif %}
