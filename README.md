@@ -279,6 +279,18 @@ with a guessed correction — but this is a prompt instruction to Pebble's
 own LLM, not something this server can force, so if it recurs the fix is
 tightening those docstrings further, not a server-side gate.
 
+**The engine played what looks like two moves in a row.** Caught live:
+within one Pebble session (one double-click), the agent called
+`make_move` twice unprompted — played the user's move, then also played
+an "obviously correct" recapture on their behalf after its own reply took
+their queen. Both calls succeeded, so the error-retry docstring instruction
+above never applied — this was a distinct failure mode. Fixed with an
+actual server-side gate: Pebble opens one MCP session per double-click, so
+`make_move` now tracks `ctx.session_id` and refuses a second call within
+the same session outright, before touching any game state, regardless of
+whether the first call succeeded, failed, or was gibberish. This one *is*
+enforced server-side, not just requested in a docstring.
+
 **Pebble says "invalid tool call, action failed."** Check `railway logs
 --service chess-mcp` — every tool call's arguments are visible there, and
 engine/state errors are caught and returned as text rather than crashing.
