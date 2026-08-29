@@ -221,6 +221,22 @@ Double-click the ring, then:
 - The server's `/healthz` route was exempted from the bearer-auth
   middleware but never actually registered as a route, so it 404'd instead
   of returning 200 — fixed by registering it explicitly.
+- **Webhook was picked over TRMNL's Polling strategy** for this plugin.
+  TRMNL's own docs list polling's refresh options as 15/60/360/720/1440
+  minutes — 15 minutes is the fastest polling can go, three times slower
+  than webhook's 5-minute floor, for no offsetting benefit (our updates are
+  already event-driven by a spoken move, not something a fixed poll
+  schedule helps with).
+- **A webhook 200 OK is not proof the physical screen updated.** TRMNL's
+  architecture is device-pull, not server-push, at the hardware level — per
+  their docs, "devices ping the server, not the other way around." Accepting
+  a webhook just queues the data at TRMNL; the e-ink display only redraws on
+  its own separate refresh cadence, and there's no API callback for "the
+  device actually displayed this." `make_move`'s "board not yet updated"
+  guard is therefore a proxy for *TRMNL has accepted the latest position*,
+  not a hard guarantee the screen has physically changed by the time it lets
+  the next move through — the best signal available, just not an ironclad
+  one.
 
 ## Troubleshooting
 
@@ -247,10 +263,13 @@ instead (Volumes tab -> Add Volume -> mount path `/data`).
 
 **Pebble says "hold on, the board hasn't updated yet."** You're inside
 TRMNL's 5-minute rate-limit window from a prior move. This is intentional —
-`make_move` refuses new moves until the deferred push actually lands, so you
-never make a move you can't see reflected on the board first. Check `railway
-logs` for `push: deferred push sent` to confirm it landed, or just wait out
-the number of seconds the message gave you.
+`make_move` refuses new moves until the deferred push is accepted by TRMNL,
+so you're never several moves ahead of what's been sent to the display.
+Check `railway logs` for `push: deferred push sent` to confirm it landed, or
+just wait out the number of seconds the message gave you. Note this confirms
+TRMNL *accepted* the update, not that the physical screen has redrawn yet —
+see [What's verified vs. assumed](#whats-verified-vs-assumed) for why that
+distinction exists.
 
 **A level/engine word wasn't understood.** Both `set_level` and `set_engine`
 return a descriptive error string (visible wherever Pebble surfaces tool
