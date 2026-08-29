@@ -25,6 +25,7 @@ container; ENGINE_KIND picks which one a fresh game starts on, and the
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -38,6 +39,9 @@ from fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("chess_mcp")
 
 BEARER = os.environ["MCP_BEARER_TOKEN"]
 PLUGIN_UUID = os.environ["TRMNL_PLUGIN_UUID"]
@@ -355,6 +359,7 @@ async def make_move(move: str) -> str:
 
     Returns a short sentence describing your move and the engine's reply.
     """
+    logger.info("make_move: received %r", move)
     async with _lock:
         state = load()
         board = chess.Board(state["fen"])
@@ -364,6 +369,7 @@ async def make_move(move: str) -> str:
         try:
             mv = parse_move(board, move)
         except ValueError as e:
+            logger.info("make_move: couldn't parse %r: %s", move, e)
             return str(e)
 
         san = board.san(mv)
@@ -399,12 +405,14 @@ async def make_move(move: str) -> str:
         out = f"You played {san}."
         if reply_san:
             out += f" I played {reply_san}."
+        logger.info("make_move: %s -> %s", san, out)
         return f"{out} {state['status']}"
 
 
 @mcp.tool()
 async def board_state() -> str:
     """Describe the current position out loud: whose turn, last moves, status."""
+    logger.info("board_state: called")
     state = load()
     board = chess.Board(state["fen"])
     recent = ", ".join(state["history"][-4:]) or "no moves yet"
@@ -426,6 +434,7 @@ async def new_game(level: str = "") -> str:
                "club", "hard", "max", or a number 0-20. Leave empty to keep
                the current setting. Pass the user's phrasing verbatim.
     """
+    logger.info("new_game: level=%r", level)
     async with _lock:
         prior = load()
         engine_kind = prior.get("engine", ENGINE_KIND)
@@ -465,6 +474,7 @@ async def set_level(level: str) -> str:
                number 0-20 (Stockfish) or 1100-1900 (Maia). Relative phrasing
                like "harder" or "easier" also works. Pass it through verbatim.
     """
+    logger.info("set_level: level=%r", level)
     async with _lock:
         state = load()
         engine_kind = state.get("engine", ENGINE_KIND)
@@ -507,6 +517,7 @@ async def set_engine(engine: str) -> str:
         engine: The user's phrasing, e.g. "maia", "maya" (common mishearing
                 of "maia"), "stockfish", "stock fish". Pass it through verbatim.
     """
+    logger.info("set_engine: engine=%r", engine)
     t = engine.lower().strip()
     if re.search(r"\bmaia\b|\bmaya\b", t):
         engine_kind = "maia"
