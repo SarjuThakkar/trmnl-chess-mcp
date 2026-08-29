@@ -12,58 +12,51 @@
   it, a flipped board with no label is confusing rather than clarifying.
 
   white_captured/black_captured are Unicode chess glyphs for the pieces
-  that side has captured, oldest-value-first (confirmed live: the glyphs
-  render correctly on real TRMNL hardware). white_edge/black_edge are the
-  material lead ("+3") shown ONLY next to whichever side is ahead -- never
-  both, matching Lichess/Chess.com.
+  that side has captured (confirmed live: the glyphs render correctly on
+  real TRMNL hardware). white_edge/black_edge are the material lead ("+3")
+  shown only next to whichever side is ahead.
 
-  STRUCTURE NOTE: TRMNL's own canonical multi-column example is a single
-  top-level .layout wrapping .columns > .column -- NOT a second nested
-  .layout inside .layout (an earlier version of this file did that and
-  content got clipped off the top/bottom of the fixed 800x480 canvas,
-  confirmed via screenshot on real hardware; nesting .layout compounds its
-  own intrinsic spacing rather than just adding a flex row). .columns also
-  has a built-in overflow engine for exactly this "doesn't fit" case.
+  LAYOUT NOTE: this is the original single layout--col structure, kept
+  exactly as it was when it worked cleanly. Two multi-column rewrites (a
+  hand-rolled layout--row, then TRMNL's own .columns/.column) both pushed
+  total content height past the fixed 800x480 canvas and clipped the
+  header and/or dropped the history line entirely -- confirmed via
+  screenshots on real hardware both times. The captured-pieces line below
+  is added as one more row in the SAME proven vertical stack, not a new
+  side-by-side structure, specifically to avoid that failure mode again.
 {% endcomment %}
 
-<div class="layout">
-  <div class="columns">
+<div class="layout layout--col gap--small lg:gap">
 
-    <div class="column" style="width: 14%;">
-      <span class="label label--small">White</span>
-      <span class="label label--base">{{ white_captured }}</span>
-      {% if white_edge != "" %}
-        <span class="label label--small label--outline">{{ white_edge }}</span>
-      {% endif %}
-    </div>
-
-    <div class="column">
-      <div class="flex flex--row flex--between flex--center-y">
-        <span class="label label--base lg:label--large">
-          Move {{ move_number }} — {{ turn }} to play
-        </span>
-        <span class="label label--outline label--base lg:label--large">
-          {{ engine }} · {{ level }}
-        </span>
-      </div>
-
-      <img style="max-width:100%; max-height:70cqh; object-fit:contain;"
-           src="{{ image_url }}" alt="Chess board">
-
-      <span class="label label--base lg:label--base">
-        {% for move in history %}{{ move }}{% unless forloop.last %} · {% endunless %}{% endfor %}
-      </span>
-    </div>
-
-    <div class="column" style="width: 14%;">
-      <span class="label label--small">Black</span>
-      <span class="label label--base">{{ black_captured }}</span>
-      {% if black_edge != "" %}
-        <span class="label label--small label--outline">{{ black_edge }}</span>
-      {% endif %}
-    </div>
-
+  <div class="flex flex--row flex--between flex--center-y">
+    <span class="label label--base lg:label--large">
+      Move {{ move_number }} — {{ turn }} to play
+    </span>
+    <span class="label label--outline label--base lg:label--large">
+      {{ engine }} · {{ level }}
+    </span>
   </div>
+
+  <div class="flex flex--center-x flex--center-y stretch-y" style="overflow:hidden;">
+    <img style="max-width:100%; max-height:90cqh; object-fit:contain;"
+         src="{{ image_url }}" alt="Chess board">
+  </div>
+
+  <div class="flex flex--row flex--between flex--center-y">
+    <span class="label label--small">
+      White {{ white_captured }}{% if white_edge != "" %} {{ white_edge }}{% endif %}
+    </span>
+    <span class="label label--small">
+      Black {{ black_captured }}{% if black_edge != "" %} {{ black_edge }}{% endif %}
+    </span>
+  </div>
+
+  <div class="flex flex--center-x">
+    <span class="label label--base lg:label--base">
+      {% for move in history %}{{ move }}{% unless forloop.last %} · {% endunless %}{% endfor %}
+    </span>
+  </div>
+
 </div>
 
 <div class="title_bar">
