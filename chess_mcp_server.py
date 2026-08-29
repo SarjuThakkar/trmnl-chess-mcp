@@ -398,12 +398,74 @@ def board_image_url(board: chess.Board, last_uci: str | None, player_color: str)
 
 PUSH_INTERVAL = 300  # TRMNL's own webhook rate limit, in seconds
 
+_PIECE_VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
+# Ascending value, matching the usual Lichess/Chess.com captured-piece tray order.
+_DISPLAY_ORDER = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]
+# A captured piece is shown with ITS OWN color's glyph (a captured black
+# knight reads as u266E in white's tray), not the capturing side's color.
+_GLYPH = {
+    (chess.PAWN, chess.WHITE): "♙", (chess.PAWN, chess.BLACK): "♟",
+    (chess.KNIGHT, chess.WHITE): "♘", (chess.KNIGHT, chess.BLACK): "♞",
+    (chess.BISHOP, chess.WHITE): "♗", (chess.BISHOP, chess.BLACK): "♝",
+    (chess.ROOK, chess.WHITE): "♖", (chess.ROOK, chess.BLACK): "♜",
+    (chess.QUEEN, chess.WHITE): "♕", (chess.QUEEN, chess.BLACK): "♛",
+}
+
+
+def _captured_pieces(history: list[str]) -> tuple[str, str, str, str]:
+    """Replay the game from the start to find exactly which pieces were
+    captured and by whom, and the resulting material balance.
+
+    Diffing current board piece-counts against the standard starting set
+    looks plausible but silently breaks around pawn promotion -- a
+    promoted pawn would read as "captured" even though it's still on the
+    board as a queen. Replaying real move history sidesteps that
+    entirely (a captured piece is recorded at the moment it's actually
+    captured), and is cheap even for a long game -- a few dozen moves,
+    microseconds each.
+
+    Returns (white_tray, black_tray, white_edge, black_edge): the tray
+    strings are the opponent's captured pieces rendered as Unicode chess
+    glyphs in ascending value order; the edge strings are the material
+    advantage ("+N") shown only next to whichever side is ahead, empty
+    otherwise.
+    """
+    captured_by_white: list[int] = []  # piece types of black pieces white has taken
+    captured_by_black: list[int] = []  # piece types of white pieces black has taken
+    b = chess.Board()
+    for san in history:
+        mv = b.parse_san(san)
+        if b.is_capture(mv):
+            if b.is_en_passant(mv):
+                square = mv.to_square + (-8 if b.turn == chess.WHITE else 8)
+            else:
+                square = mv.to_square
+            captured_piece = b.piece_at(square)
+            target = captured_by_white if captured_piece.color == chess.BLACK else captured_by_black
+            target.append(captured_piece.piece_type)
+        b.push(mv)
+
+    def tray(pieces: list[int], color: bool) -> str:
+        return "".join(_GLYPH[(pt, color)] for pt in _DISPLAY_ORDER for _ in range(pieces.count(pt)))
+
+    white_value = sum(_PIECE_VALUES[pt] for pt in captured_by_white)
+    black_value = sum(_PIECE_VALUES[pt] for pt in captured_by_black)
+    diff = white_value - black_value
+
+    return (
+        tray(captured_by_white, chess.BLACK),
+        tray(captured_by_black, chess.WHITE),
+        f"+{diff}" if diff > 0 else "",
+        f"+{-diff}" if diff < 0 else "",
+    )
+
 
 def _build_payload(state: dict) -> dict:
     board = chess.Board(state["fen"])
     engine_kind = state.get("engine", ENGINE_KIND)
     skill = state.get("skill", DEFAULT_LEVEL)
     player_color = state.get("player_color", "white")
+    white_tray, black_tray, white_edge, black_edge = _captured_pieces(state["history"])
     return {
         "merge_variables": {
             "image_url": board_image_url(board, state.get("last_uci"), player_color),
@@ -415,6 +477,10 @@ def _build_payload(state: dict) -> dict:
             "history": state["history"][-6:],
             "engine": engine_label(engine_kind),
             "level": level_name(skill, engine_kind),
+            "white_captured": white_tray,
+            "black_captured": black_tray,
+            "white_edge": white_edge,
+            "black_edge": black_edge,
         }
     }
 

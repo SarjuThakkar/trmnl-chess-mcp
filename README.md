@@ -169,9 +169,15 @@ whichever sandbox group your double-click uses.
 4. Find the **Webhook URL** field (`https://usetrmnl.com/api/custom_plugins/<uuid>`)
    — the `<uuid>` is your `TRMNL_PLUGIN_UUID`
 
-The markup shows the board, whose move it is, move history, and an
+The markup shows the board, whose move it is, move history, an
 `{{ engine }} · {{ level }}` badge (e.g. "Maia · 1500") so you can see at a
-glance what you're playing against without asking.
+glance what you're playing against without asking, and a captured-pieces
+column on each side (Unicode chess glyphs, e.g. "♟♟♟♞") with the material
+lead shown only next to whichever side is ahead — confirmed live on real
+TRMNL hardware; the glyphs do render. Computed by replaying the full move
+history rather than diffing piece counts, specifically so pawn promotions
+never get miscounted as a capture (`_captured_pieces` in
+`chess_mcp_server.py`).
 
 TRMNL rate-limits webhook pushes to once per 5 minutes and 429s above that.
 Inside that window, the server schedules a single deferred push for when the

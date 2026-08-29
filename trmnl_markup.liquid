@@ -5,33 +5,62 @@
 
   merge_variables pushed by chess_mcp_server.py:
     image_url, status, last_move, move_number, turn, player_color, history,
-    engine, level
+    engine, level, white_captured, black_captured, white_edge, black_edge
 
   The board image is oriented to player_color (the user's own pieces at the
   bottom), so it's worth always showing player_color on-screen too -- without
   it, a flipped board with no label is confusing rather than clarifying.
+
+  white_captured/black_captured are Unicode chess glyphs (e.g. u265Fu265Fu265E)
+  for the pieces that side has captured, oldest-value-first. white_edge/
+  black_edge are the material lead ("+3") shown ONLY next to whichever side
+  is ahead -- never both, matching how Lichess/Chess.com do it. These
+  columns are UNVERIFIED against TRMNL's actual font glyph coverage for
+  chess symbols -- if they render as blank boxes on the real device, fall
+  back to plain letters (chess_mcp_server.py's _GLYPH dict is the only
+  place that needs to change; swap the glyph values for "P"/"N"/"B"/"R"/"Q").
 {% endcomment %}
 
-<div class="layout layout--col gap--small lg:gap">
+<div class="layout layout--row gap--small lg:gap">
 
-  <div class="flex flex--row flex--between flex--center-y">
-    <span class="label label--base lg:label--large">
-      Move {{ move_number }} — {{ turn }} to play
-    </span>
-    <span class="label label--outline label--base lg:label--large">
-      {{ engine }} · {{ level }}
-    </span>
+  <div class="layout layout--col flex--center-x gap--small" style="width: 14%;">
+    <span class="label label--small">White</span>
+    <span class="label label--base lg:label--large">{{ white_captured }}</span>
+    {% if white_edge != "" %}
+      <span class="label label--small label--outline">{{ white_edge }}</span>
+    {% endif %}
   </div>
 
-  <div class="flex flex--center-x flex--center-y stretch-y" style="overflow:hidden;">
-    <img style="max-width:100%; max-height:90cqh; object-fit:contain;"
-         src="{{ image_url }}" alt="Chess board">
+  <div class="layout layout--col gap--small stretch-x">
+
+    <div class="flex flex--row flex--between flex--center-y">
+      <span class="label label--base lg:label--large">
+        Move {{ move_number }} — {{ turn }} to play
+      </span>
+      <span class="label label--outline label--base lg:label--large">
+        {{ engine }} · {{ level }}
+      </span>
+    </div>
+
+    <div class="flex flex--center-x flex--center-y stretch-y" style="overflow:hidden;">
+      <img style="max-width:100%; max-height:90cqh; object-fit:contain;"
+           src="{{ image_url }}" alt="Chess board">
+    </div>
+
+    <div class="flex flex--center-x">
+      <span class="label label--base lg:label--base">
+        {% for move in history %}{{ move }}{% unless forloop.last %} · {% endunless %}{% endfor %}
+      </span>
+    </div>
+
   </div>
 
-  <div class="flex flex--center-x">
-    <span class="label label--base lg:label--base">
-      {% for move in history %}{{ move }}{% unless forloop.last %} · {% endunless %}{% endfor %}
-    </span>
+  <div class="layout layout--col flex--center-x gap--small" style="width: 14%;">
+    <span class="label label--small">Black</span>
+    <span class="label label--base lg:label--large">{{ black_captured }}</span>
+    {% if black_edge != "" %}
+      <span class="label label--small label--outline">{{ black_edge }}</span>
+    {% endif %}
   </div>
 
 </div>
