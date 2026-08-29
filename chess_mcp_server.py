@@ -429,6 +429,14 @@ async def make_move(move: str) -> str:
     interpreting. Do not translate to algebraic notation yourself and do not
     guess when the user is unclear; pass the raw phrasing and relay any error.
 
+    IMPORTANT: if the result describes an error (couldn't parse, ambiguous,
+    board not yet refreshed, game over) -- speak that back to the user
+    VERBATIM and stop there. Do not call this tool again with a different
+    guess, and do not call another tool to investigate. An ambiguous-move
+    error already lists the real options as a question for the user to
+    answer out loud next turn; picking one for them yourself is exactly the
+    guess this instruction tells you not to make.
+
     Args:
         move: What the user said, e.g. "knight to f3", "e4", "take the bishop",
               "castle kingside". Loose phrasing is expected and fine.
@@ -516,6 +524,9 @@ async def new_game(level: str = "", color: str = "") -> str:
     Call this when the user says anything like "new game", "start over",
     "reset the board", "new game as black", "let's play white this time".
 
+    If the result describes an error (bad level), speak it back verbatim
+    and stop -- don't retry with a guessed correction.
+
     Args:
         level: Optional difficulty in the user's own words, e.g. "easy",
                "club", "hard", "max", or a number 0-20. Leave empty to keep
@@ -589,6 +600,9 @@ async def set_level(level: str) -> str:
     Call this for "make it harder", "set difficulty to easy", "play stronger",
     and similar. Takes effect on the engine's next move.
 
+    If the result describes an error (didn't catch that level), speak it
+    back verbatim and stop -- don't retry with a guessed correction.
+
     Args:
         level: The user's phrasing, e.g. "easy", "club", "brutal", "max", a
                number 0-20 (Stockfish) or 1100-1900 (Maia). Relative phrasing
@@ -632,6 +646,9 @@ async def set_engine(engine: str) -> str:
     maia", and similar. The difficulty resets to the new engine's own default
     (a Maia rating and a Stockfish skill level aren't the same scale, so a
     number that made sense for one wouldn't for the other).
+
+    If the result describes an error (didn't catch that engine), speak it
+    back verbatim and stop -- don't retry with a guessed correction.
 
     Args:
         engine: The user's phrasing, e.g. "maia", "maya" (common mishearing

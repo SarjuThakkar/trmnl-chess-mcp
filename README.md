@@ -224,6 +224,17 @@ Double-click the ring, then:
 
 ## Troubleshooting
 
+**Pebble says "action completed" 2-3 times for one thing I said.** Pebble's
+cloud agent was chaining multiple tool calls within a single turn whenever a
+call returned an error — e.g. `make_move("Pawn d6")` came back ambiguous
+("did you mean Bd6, d6?"), and instead of relaying that question to the
+user, the agent silently picked one and called `make_move` again itself
+(confirmed in `railway logs`). Every tool's docstring now explicitly
+instructs the agent to speak an error back verbatim and stop, not retry
+with a guessed correction — but this is a prompt instruction to Pebble's
+own LLM, not something this server can force, so if it recurs the fix is
+tightening those docstrings further, not a server-side gate.
+
 **Pebble says "invalid tool call, action failed."** Check `railway logs
 --service chess-mcp` — every tool call's arguments are visible there, and
 engine/state errors are caught and returned as text rather than crashing.
