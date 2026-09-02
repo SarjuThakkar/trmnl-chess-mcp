@@ -285,11 +285,23 @@ within one Pebble session (one double-click), the agent called
 an "obviously correct" recapture on their behalf after its own reply took
 their queen. Both calls succeeded, so the error-retry docstring instruction
 above never applied — this was a distinct failure mode. Fixed with an
-actual server-side gate: Pebble opens one MCP session per double-click, so
-`make_move` now tracks `ctx.session_id` and refuses a second call within
-the same session outright, before touching any game state, regardless of
-whether the first call succeeded, failed, or was gibberish. This one *is*
-enforced server-side, not just requested in a docstring.
+actual server-side gate: `make_move` records, per `ctx.session_id`, when
+that session last landed a move, and refuses another call from it inside
+`REPEAT_MOVE_WINDOW` (20s). This one *is* enforced server-side, not just
+requested in a docstring.
+
+The window matters. The ring doesn't speak MCP — it hands a transcript to
+a long-lived Claude Code session on the Pi, and *that* agent is the client.
+Its transport session to this server survives many separate ring
+interactions across a whole day, so the original "one move per session,
+ever" gate bricked every genuine move after the first. A hallucinated
+follow-up lands a second or two after the first call returns; a real turn
+needs tens of seconds (hear the reply, double-click, speak, transcribe),
+so time separates them cleanly. The stamp is also written only once a move
+actually reaches the board — a rejection that changed nothing (ambiguous
+or unparseable phrasing, game over, display not yet refreshed) leaves the
+player free to clarify and move in the same session, which the original
+gate wrongly refused.
 
 **Pebble says "invalid tool call, action failed."** Check `railway logs
 --service chess-mcp` — every tool call's arguments are visible there, and

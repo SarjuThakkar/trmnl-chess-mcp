@@ -201,15 +201,29 @@ _last_push = 0.0
 # up, and would be playing a game they can no longer see on the board.
 _pending_push: asyncio.Task | None = None
 _pending_push_eta = 0.0
-# Pebble opens one MCP session per double-click (confirmed live: a fresh
-# "Created new transport with session ID" log line per turn). Caught in
-# production: the agent called make_move twice within a single session,
-# unprompted, to "helpfully" play an obvious-looking recapture after its
-# own reply captured the player's queen -- an entirely different failure
-# from the earlier retry-after-error chaining, since both calls succeeded.
-# One real move per session, enforced server-side, is a hard guarantee the
-# docstring alone can't provide.
-_moved_sessions: set[str] = set()
+# Caught in production: the agent called make_move twice within a single
+# session, unprompted, to "helpfully" play an obvious-looking recapture
+# after its own reply captured the player's queen -- an entirely different
+# failure from the earlier retry-after-error chaining, since both calls
+# succeeded. A server-side stop is the hard guarantee the docstring alone
+# can't provide.
+#
+# It is scoped by TIME, not "once per session, ever". The ring doesn't talk
+# to this server; it hands a transcript to a long-lived Claude Code session
+# on the Pi, and *that* is the MCP client. Its transport session to us
+# survives across many genuinely separate ring interactions over a whole day
+# (confirmed live: one session spanning distinct back-and-forth exchanges),
+# so a permanent per-session flag would brick every real move after the
+# first until the agent restarted. What we're actually guarding against is a
+# hallucinated follow-up move played inside the agent's handling of one
+# reply, which lands a second or two after the first call returns -- never
+# the tens of seconds a real turn needs (hear the reply, double-click,
+# speak, transcribe). Stamped only on a move that genuinely reached the
+# board, so a rejection that changed nothing (ambiguous or unparseable
+# phrasing, game over, display not yet refreshed) leaves the player free to
+# clarify and move in the same session.
+REPEAT_MOVE_WINDOW = 20  # seconds
+_last_move_at: dict[str, float] = {}
 
 
 # --------------------------------------------------------------------------
@@ -600,10 +614,13 @@ async def make_move(move: str, ctx: Context) -> str:
     """
     logger.info("make_move: received %r", move)
     session_id = ctx.session_id
-    if session_id in _moved_sessions:
-        logger.warning("make_move: refused second call in session %s", session_id)
+    since = time.time() - _last_move_at.get(session_id, float("-inf"))
+    if since < REPEAT_MOVE_WINDOW:
+        logger.warning(
+            "make_move: refused repeat call %.1fs after session %s last moved",
+            since, session_id,
+        )
         return "Only one move per turn -- double-click again to make your next move."
-    _moved_sessions.add(session_id)
     if _pending_push is not None and not _pending_push.done():
         wait_s = max(0, round(_pending_push_eta - time.time()))
         logger.info("make_move: rejected, board not yet refreshed (%ds left)", wait_s)
@@ -652,6 +669,13 @@ async def make_move(move: str, ctx: Context) -> str:
 
         state["fen"] = board.fen()
         save(state)
+        # Start the repeat window only now, once the move is committed: a
+        # rejection above never reaches this, and an engine failure that
+        # loses the move doesn't lock the player out of replaying it.
+        now = time.time()
+        for stale in [s for s, t in _last_move_at.items() if now - t >= REPEAT_MOVE_WINDOW]:
+            del _last_move_at[stale]
+        _last_move_at[session_id] = now
         await push(state)
 
         out = f"You played {san}."
